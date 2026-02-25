@@ -151,14 +151,14 @@ class SharpTrainerV2:
         # 6. 边缘损失
         loss_edge = self.criterion_edge(outputs, orig_imgs)
         
-        # 改进的权重配置
+        # 生成模型核心思路：解开束缚，大幅度提高对抗与感知损失
         total_loss = (
-            loss_gan * 0.3 +              # 对抗损失，降低权重以防止破坏色彩
-            loss_l1_masked * 2.0 +        # 像素损失，提高权重确保颜色正确
-            loss_perceptual * 2.5 +       # 感知损失
-            loss_frequency * 1.5 +        # 频域损失
-            loss_sharpness * 2.0 +        # 锐度损失
-            loss_edge * 1.5               # 边缘损失
+            loss_gan * 1.0 +              # [大升] GAN损失，逼网络“无中生有”生成逼真纹理
+            loss_l1_masked * 1.0 +        # [降低] 去除像素级束缚，允许模型进行丰富的重构
+            loss_perceptual * 4.0 +       # [大升] 用高层特征维持语义正确（这是生成连贯纹理的核心）
+            loss_frequency * 1.0 +        # [略降] 频域特征维持
+            loss_sharpness * 2.0 +        # [大降] 将去除模糊的任务交接给GAN，而不是简单的梯度算子
+            loss_edge * 1.0               # [略降] 边缘损失
         )
         
         return total_loss, {
@@ -191,7 +191,7 @@ class SharpTrainerV2:
         return d_loss
 
 def train_sharp_v2(input_dir, output_dir, mask_dir, epochs=100, batch_size=4, 
-                   lr_g=1e-4, lr_d=4e-5, final_model_path="final_model_dir/final_model_sharp_v2.pth"):
+                   lr_g=1e-4, lr_d=2e-4, final_model_path="final_model_dir/final_model_sharp_v2.pth"):
     """改进的清晰度训练"""
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"正在使用的训练设备: {device}")
@@ -251,7 +251,7 @@ def train_sharp_v2(input_dir, output_dir, mask_dir, epochs=100, batch_size=4,
             # ==================
             # 训练判别器（多次）
             # ==================
-            for _ in range(n_critic if epoch < 10 else 1):  # 前10轮多训练判别器
+            for _ in range(n_critic):  # 遵循WGAN-GP，全程多次训练判别器
                 optimizer_d.zero_grad()
                 
                 # 生成假图像
@@ -368,9 +368,9 @@ if __name__ == "__main__":
         input_dir=input_folder,
         output_dir=output_folder,
         mask_dir=mask_folder,
-        epochs=100,
-        batch_size=4,
+        epochs=200,      # 增加训练论断，因为模型变得更复杂且 batch 更小
+        batch_size=2,    # [适配4060 8GB] 使用门控网络消耗更多显存，必须把 batch_size 降至 2 防止崩溃
         lr_g=1e-4,   # 生成器学习率
-        lr_d=4e-5,   # 判别器学习率（更低）
+        lr_d=2e-4,   # 判别器学习率（WGAN-GP标准下D学习率应高于或等于G）
         final_model_path=final_model_pth
     )

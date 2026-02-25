@@ -52,7 +52,7 @@ HTML_TEMPLATE = """
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI Image Restoration System</title>
+    <title>AI 图像修复系统</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -241,7 +241,7 @@ HTML_TEMPLATE = """
 </head>
 <body>
     <div class="header">
-        <h1>AI Image Restoration System</h1>
+        <h1>AI 图像修复系统</h1>
     </div>
 
     <div class="container">
@@ -249,19 +249,20 @@ HTML_TEMPLATE = """
             <div class="upload-section">
                 <input type="file" id="fileInput" accept="image/*" style="display:none">
                 <button class="btn" onclick="document.getElementById('fileInput').click()">
-                    Select Image
+                    选择图片
                 </button>
-                <p class="upload-hint">Supported formats: JPG, PNG, BMP</p>
+                <p class="upload-hint">支持格式: JPG, PNG, BMP</p>
             </div>
         </div>
 
         <div class="instructions" id="instructions">
-            <h3>Instructions</h3>
+            <h3>使用说明</h3>
             <ul>
-                <li>Click and drag on the image to select mosaic regions</li>
-                <li>Multiple regions can be selected</li>
-                <li>Click "Clear Selection" to reset</li>
-                <li>Click "Process" when ready</li>
+                <li>在图片上点击并拖动以选择马赛克区域</li>
+                <li>可以选中多个区域</li>
+                <li>点击“撤销”或按 Ctrl+Z 撤销上一个选区</li>
+                <li>点击“清除选择”重置所有选区</li>
+                <li>准备就绪后点击“处理图片”</li>
             </ul>
         </div>
 
@@ -271,33 +272,34 @@ HTML_TEMPLATE = """
                     <canvas id="canvas"></canvas>
                 </div>
                 <div class="controls">
-                    <button class="btn btn-secondary" onclick="clearSelection()">Clear Selection</button>
-                    <button class="btn" onclick="processImage()" id="processBtn">Process Image</button>
+                    <button class="btn btn-secondary" onclick="undoLast()">撤销 (Ctrl+Z)</button>
+                    <button class="btn btn-secondary" onclick="clearSelection()">清除选择</button>
+                    <button class="btn" onclick="processImage()" id="processBtn">处理图片</button>
                 </div>
             </div>
         </div>
 
         <div class="loading" id="loading">
             <div class="spinner"></div>
-            <p class="loading-text">Processing image, please wait...</p>
+            <p class="loading-text">正在处理图片，请稍候...</p>
         </div>
 
         <div class="result-section" id="resultSection">
             <div class="card">
-                <h2 class="section-title">Results</h2>
+                <h2 class="section-title">处理结果</h2>
                 <div class="image-compare">
                     <div class="image-box">
-                        <h3>Original</h3>
+                        <h3>原图</h3>
                         <img id="origImage" src="" alt="Original">
                     </div>
                     <div class="image-box">
-                        <h3>Restored</h3>
+                        <h3>修复后</h3>
                         <img id="resultImage" src="" alt="Restored">
                     </div>
                 </div>
                 <div style="text-align: center;">
                     <a id="downloadLink" href="#" download="restored_image.jpg" class="btn">
-                        Download Result
+                        下载结果
                     </a>
                 </div>
             </div>
@@ -312,6 +314,9 @@ HTML_TEMPLATE = """
         document.getElementById('fileInput').addEventListener('change', function(e) {
             const file = e.target.files[0];
             if (!file) return;
+
+            // 自动清除所有框
+            rectangles = [];
 
             const reader = new FileReader();
             reader.onload = function(event) {
@@ -339,13 +344,28 @@ HTML_TEMPLATE = """
             
             drawImage();
             
+            // 移除旧监听器（如果有）
+            canvas.removeEventListener('mousedown', startDrawing);
+            canvas.removeEventListener('mousemove', draw);
+            canvas.removeEventListener('mouseup', stopDrawing);
+            canvas.removeEventListener('mouseout', stopDrawing);
+            
             canvas.addEventListener('mousedown', startDrawing);
             canvas.addEventListener('mousemove', draw);
             canvas.addEventListener('mouseup', stopDrawing);
             canvas.addEventListener('mouseout', stopDrawing);
         }
 
+        // 键盘撤销快捷键
+        window.addEventListener('keydown', function(e) {
+            if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
+                e.preventDefault();
+                undoLast();
+            }
+        });
+
         function drawImage() {
+            if (!ctx || !img) return;
             ctx.clearRect(0, 0, canvas.width, canvas.height);
             ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
             
@@ -396,8 +416,8 @@ HTML_TEMPLATE = """
             const width = endX - startX;
             const height = endY - startY;
             
-            // 只保存有效的矩形（面积大于100像素）
-            if (Math.abs(width) > 10 && Math.abs(height) > 10) {
+            // 只保存有效的矩形（面积大于一定阈值）
+            if (Math.abs(width) > 5 && Math.abs(height) > 5) {
                 rectangles.push({
                     x: Math.min(startX, endX),
                     y: Math.min(startY, endY),
@@ -411,6 +431,13 @@ HTML_TEMPLATE = """
         function clearSelection() {
             rectangles = [];
             drawImage();
+        }
+
+        function undoLast() {
+            if (rectangles.length > 0) {
+                rectangles.pop();
+                drawImage();
+            }
         }
 
         async function processImage() {
@@ -471,7 +498,8 @@ HTML_TEMPLATE = """
                     document.getElementById('downloadLink').href = resultUrl;
                     document.getElementById('resultSection').style.display = 'block';
                 } else {
-                    alert('处理失败: ' + await response.text());
+                    const errorText = await response.text();
+                    alert('处理失败: ' + errorText);
                 }
             } catch (err) {
                 alert('处理出错: ' + err.message);

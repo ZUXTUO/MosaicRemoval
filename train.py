@@ -426,42 +426,52 @@ class DoubleConv(nn.Module):
     def forward(self, x):
         return self.conv(x)
 
+class GatedDoubleConv(nn.Module):
+    """门控双卷积块 - 专为脑补生成马赛克缺失区域设计"""
+    def __init__(self, in_channels, out_channels):
+        super().__init__()
+        self.conv1 = GatedConv2d(in_channels, out_channels, activation='lrelu')
+        self.conv2 = GatedConv2d(out_channels, out_channels, activation='lrelu')
+    
+    def forward(self, x):
+        return self.conv2(self.conv1(x))
+
 class InpaintingNetwork(nn.Module):
     """
-    改进的U-Net架构，加入注意力机制
+    极度强调生成能力的U-Net架构：全门控卷积 + 注意力机制
     """
     def __init__(self, in_channels=4):  # 3 (RGB) + 1 (mask)
         super().__init__()
         
-        # 编码器
-        self.enc1 = DoubleConv(in_channels, 64)
+        # 编码器 (改用门控网络)
+        self.enc1 = GatedDoubleConv(in_channels, 64)
         self.pool1 = nn.MaxPool2d(2)
         
-        self.enc2 = DoubleConv(64, 128)
+        self.enc2 = GatedDoubleConv(64, 128)
         self.pool2 = nn.MaxPool2d(2)
         
-        self.enc3 = DoubleConv(128, 256)
+        self.enc3 = GatedDoubleConv(128, 256)
         self.pool3 = nn.MaxPool2d(2)
         
-        self.enc4 = DoubleConv(256, 512)
+        self.enc4 = GatedDoubleConv(256, 512)
         self.pool4 = nn.MaxPool2d(2)
         
         # 瓶颈层 + 注意力
-        self.bottleneck = DoubleConv(512, 1024)
+        self.bottleneck = GatedDoubleConv(512, 1024)
         self.attention = AttentionBlock(1024)
         
         # 解码器
         self.up4 = nn.ConvTranspose2d(1024, 512, 2, stride=2)
-        self.dec4 = DoubleConv(1024, 512)  # 1024 = 512 (from up4) + 512 (from enc4)
+        self.dec4 = GatedDoubleConv(1024, 512)  # 1024 = 512 (from up4) + 512 (from enc4)
         
         self.up3 = nn.ConvTranspose2d(512, 256, 2, stride=2)
-        self.dec3 = DoubleConv(512, 256)  # 512 = 256 (from up3) + 256 (from enc3)
+        self.dec3 = GatedDoubleConv(512, 256)  # 512 = 256 (from up3) + 256 (from enc3)
         
         self.up2 = nn.ConvTranspose2d(256, 128, 2, stride=2)
-        self.dec2 = DoubleConv(256, 128)  # 256 = 128 (from up2) + 128 (from enc2)
+        self.dec2 = GatedDoubleConv(256, 128)  # 256 = 128 (from up2) + 128 (from enc2)
         
         self.up1 = nn.ConvTranspose2d(128, 64, 2, stride=2)
-        self.dec1 = DoubleConv(128, 64)   # 128 = 64 (from up1) + 64 (from enc1)
+        self.dec1 = GatedDoubleConv(128, 64)   # 128 = 64 (from up1) + 64 (from enc1)
         
         # 输出层
         self.output = nn.Sequential(
