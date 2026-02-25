@@ -106,43 +106,26 @@ class SharpTrainerV2:
         self.criterion_sharpness = SharpnessLoss().to(device)
         self.criterion_edge = EdgeLoss().to(device)
     
-    def compute_gradient_penalty(self, real_imgs, fake_imgs):
-        """计算梯度惩罚（WGAN-GP）"""
-        batch_size = real_imgs.size(0)
-        alpha = torch.rand(batch_size, 1, 1, 1, device=self.device)
-        
-        interpolates = (alpha * real_imgs + (1 - alpha) * fake_imgs).requires_grad_(True)
-        d_interpolates = self.discriminator(interpolates)
-        
-        fake = torch.ones(d_interpolates.size(), device=self.device, requires_grad=False)
-        
-        gradients = torch.autograd.grad(
-            outputs=d_interpolates,
-            inputs=interpolates,
-            grad_outputs=fake,
-            create_graph=True,
-            retain_graph=True,
-            only_inputs=True
-        )[0]
-        
-        gradients = gradients.view(batch_size, -1)
-        gradient_penalty = ((gradients.norm(2, dim=1) - 1) ** 2).mean()
-        return gradient_penalty
-    
     def compute_generator_loss(self, outputs, orig_imgs, masks, fake_validity):
-        """生成器损失 - 改进的权重配置"""
-        mask_expanded = masks.repeat(1, 3, 1, 1)
+        """生成器损失 - 改为LSGAN并修复掩码L1损失计算"""
+        if masks.size(1) == 1:
+            mask_expanded = masks.repeat(1, 3, 1, 1)
+        else:
+            mask_expanded = masks
+            
+        # 1. LSGAN 对抗损失（有界限，更稳定）
+        loss_gan = 0.5 * torch.mean((fake_validity - 1.0) ** 2)
         
-        # 1. 对抗损失 - 必须与WGAN-GP匹配，使用 -E[D(fake)] 而不是 MSE
-        loss_gan = -torch.mean(fake_validity)
-        
-        # 2. 像素损失（马赛克区域）
-        loss_l1_masked = self.criterion_l1(outputs * mask_expanded, orig_imgs * mask_expanded)
+        # 2. 像素损失（只针对马赛克区域计算均值，不被全图稀释）
+        pixel_diff = torch.abs(outputs - orig_imgs)
+        loss_l1_masked = torch.sum(pixel_diff * mask_expanded) / (torch.sum(mask_expanded) + 1e-8)
+        # 补充：全图L1损失防止其他区域发生微小偏移
+        loss_l1_global = torch.mean(pixel_diff)
         
         # 3. 感知损失
         loss_perceptual = self.criterion_perceptual(outputs, orig_imgs)
         
-        # 4. 频域损失
+        # 4. 频域损失（保持高频纹理）
         loss_frequency = self.criterion_frequency(outputs, orig_imgs)
         
         # 5. 锐度损失
@@ -151,14 +134,15 @@ class SharpTrainerV2:
         # 6. 边缘损失
         loss_edge = self.criterion_edge(outputs, orig_imgs)
         
-        # 生成模型核心思路：解开束缚，大幅度提高对抗与感知损失
+        # 按照合理的权重分配
         total_loss = (
-            loss_gan * 1.0 +              # [大升] GAN损失，逼网络“无中生有”生成逼真纹理
-            loss_l1_masked * 1.0 +        # [降低] 去除像素级束缚，允许模型进行丰富的重构
-            loss_perceptual * 4.0 +       # [大升] 用高层特征维持语义正确（这是生成连贯纹理的核心）
-            loss_frequency * 1.0 +        # [略降] 频域特征维持
-            loss_sharpness * 2.0 +        # [大降] 将去除模糊的任务交接给GAN，而不是简单的梯度算子
-            loss_edge * 1.0               # [略降] 边缘损失
+            loss_gan * 0.1 +              # GAN损失保持模型创造力，LSGAN下0.1是很合适的权重
+            loss_l1_masked * 10.0 +       # [修复] 极大地约束马赛克区域精准还原
+            loss_l1_global * 1.0 +        # 维持全图基本画质
+            loss_perceptual * 2.0 +       # VGG特征匹配
+            loss_frequency * 1.0 +        
+            loss_sharpness * 1.0 +        
+            loss_edge * 1.0               
         )
         
         return total_loss, {
@@ -171,22 +155,19 @@ class SharpTrainerV2:
         }
     
     def compute_discriminator_loss(self, real_imgs, fake_imgs):
-        """判别器损失 - 使用WGAN-GP"""
+        """判别器损失 - 使用LSGAN以提供稳定的梯度"""
         # 真实图像
         real_validity = self.discriminator(real_imgs)
         
         # 生成图像
         fake_validity = self.discriminator(fake_imgs.detach())
         
-        # WGAN损失
-        loss_real = -torch.mean(real_validity)
-        loss_fake = torch.mean(fake_validity)
-        
-        # 梯度惩罚
-        gradient_penalty = self.compute_gradient_penalty(real_imgs, fake_imgs)
+        # LSGAN损失：让真实样本接近1，假样本接近0
+        loss_real = 0.5 * torch.mean((real_validity - 1.0) ** 2)
+        loss_fake = 0.5 * torch.mean(fake_validity ** 2)
         
         # 总损失
-        d_loss = loss_real + loss_fake + 10.0 * gradient_penalty
+        d_loss = loss_real + loss_fake
         
         return d_loss
 
@@ -225,14 +206,14 @@ def train_sharp_v2(input_dir, output_dir, mask_dir, epochs=100, batch_size=4,
     )
     
     print(f"开始改进版清晰度训练，共计 {len(dataset)} 张图片，计划训练 {epochs} 轮...")
-    print("改进：WGAN-GP + 锐度损失 + 改进频域损失 + 平衡的判别器")
+    print("改进：LSGAN稳定对抗 + 修复遮罩L1计算 + 锐度频域优化")
     
     best_loss = float('inf')
     patience_counter = 0
     early_stop_patience = 25
     
-    # 判别器训练次数（前期多训练判别器）
-    n_critic = 5
+    # LSGAN判别器训练次数1次即可
+    n_critic = 1
     
     for epoch in range(epochs):
         generator.train()
@@ -249,16 +230,15 @@ def train_sharp_v2(input_dir, output_dir, mask_dir, epochs=100, batch_size=4,
             mask_expanded = masks.repeat(1, 3, 1, 1)
             
             # ==================
-            # 训练判别器（多次）
+            # 训练判别器
             # ==================
-            for _ in range(n_critic):  # 遵循WGAN-GP，全程多次训练判别器
+            for _ in range(n_critic):
                 optimizer_d.zero_grad()
                 
                 # 生成假图像
                 with torch.no_grad():
                     fake_imgs = generator(mosaiced_imgs, masks)
                 
-                # 不再仅截取马赛克区域，全图鉴别能防止网络只在黑框边界钻空子
                 real_patches = orig_imgs
                 fake_patches = fake_imgs
                 
@@ -371,6 +351,6 @@ if __name__ == "__main__":
         epochs=200,      # 增加训练论断，因为模型变得更复杂且 batch 更小
         batch_size=2,    # [适配4060 8GB] 使用门控网络消耗更多显存，必须把 batch_size 降至 2 防止崩溃
         lr_g=1e-4,   # 生成器学习率
-        lr_d=2e-4,   # 判别器学习率（WGAN-GP标准下D学习率应高于或等于G）
+        lr_d=1e-4,   # 判别器学习率（LSGAN下一般和G对称）
         final_model_path=final_model_pth
     )
