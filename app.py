@@ -15,7 +15,7 @@ from train import InpaintingNetwork
 app = Flask(__name__)
 
 # 模型文件路径 - 使用最佳模型
-MODEL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models_temp", "best_model.pth")
+MODEL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models_temp", "best_model_v2.pth")
 
 # 设备选择
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -32,7 +32,7 @@ def load_model():
         
         if os.path.exists(MODEL_PATH):
             print(f"正在加载模型权重: {MODEL_PATH}")
-            model.load_state_dict(torch.load(MODEL_PATH, map_location=device))
+            model.load_state_dict(torch.load(MODEL_PATH, map_location=device, weights_only=True))
             print("模型加载成功！")
         else:
             print(f"警告：找不到模型文件 {MODEL_PATH}。请先运行 train.py 训练模型。")
