@@ -142,6 +142,7 @@ HTML_TEMPLATE = """
             cursor: crosshair;
             max-width: 100%;
             background: white;
+            touch-action: none;
         }
         .controls {
             margin-top: 1.5rem;
@@ -344,16 +345,69 @@ HTML_TEMPLATE = """
             
             drawImage();
             
-            // 移除旧监听器（如果有）
-            canvas.removeEventListener('mousedown', startDrawing);
-            canvas.removeEventListener('mousemove', draw);
-            canvas.removeEventListener('mouseup', stopDrawing);
-            canvas.removeEventListener('mouseout', stopDrawing);
+            // 移除旧监听器
+            const events = ['mousedown', 'mousemove', 'mouseup', 'mouseout', 'touchstart', 'touchmove', 'touchend', 'touchcancel'];
+            events.forEach(evt => {
+                canvas.removeEventListener(evt, handleEvent);
+            });
             
-            canvas.addEventListener('mousedown', startDrawing);
-            canvas.addEventListener('mousemove', draw);
-            canvas.addEventListener('mouseup', stopDrawing);
-            canvas.addEventListener('mouseout', stopDrawing);
+            // 添加新监听器
+            canvas.addEventListener('mousedown', handleEvent);
+            canvas.addEventListener('mousemove', handleEvent);
+            canvas.addEventListener('mouseup', handleEvent);
+            canvas.addEventListener('mouseout', handleEvent);
+            
+            // 移动端触控支持
+            canvas.addEventListener('touchstart', handleEvent, { passive: false });
+            canvas.addEventListener('touchmove', handleEvent, { passive: false });
+            canvas.addEventListener('touchend', handleEvent, { passive: false });
+            canvas.addEventListener('touchcancel', handleEvent, { passive: false });
+        }
+
+        function handleEvent(e) {
+            if (e.type.startsWith('touch')) {
+                e.preventDefault();
+            }
+
+            switch(e.type) {
+                case 'mousedown':
+                case 'touchstart':
+                    startDrawing(e);
+                    break;
+                case 'mousemove':
+                case 'touchmove':
+                    draw(e);
+                    break;
+                case 'mouseup':
+                case 'mouseout':
+                case 'touchend':
+                case 'touchcancel':
+                    stopDrawing(e);
+                    break;
+            }
+        }
+
+        function getEventCoords(e) {
+            let clientX, clientY;
+            if (e.touches && e.touches.length > 0) {
+                clientX = e.touches[0].clientX;
+                clientY = e.touches[0].clientY;
+            } else if (e.changedTouches && e.changedTouches.length > 0) {
+                clientX = e.changedTouches[0].clientX;
+                clientY = e.changedTouches[0].clientY;
+            } else {
+                clientX = e.clientX;
+                clientY = e.clientY;
+            }
+
+            const rect = canvas.getBoundingClientRect();
+            const scaleX = canvas.width / rect.width;
+            const scaleY = canvas.height / rect.height;
+            
+            return {
+                x: (clientX - rect.left) * scaleX,
+                y: (clientY - rect.top) * scaleY
+            };
         }
 
         // 键盘撤销快捷键
@@ -381,21 +435,17 @@ HTML_TEMPLATE = """
 
         function startDrawing(e) {
             isDrawing = true;
-            const rect = canvas.getBoundingClientRect();
-            const scaleX = canvas.width / rect.width;
-            const scaleY = canvas.height / rect.height;
-            startX = (e.clientX - rect.left) * scaleX;
-            startY = (e.clientY - rect.top) * scaleY;
+            const coords = getEventCoords(e);
+            startX = coords.x;
+            startY = coords.y;
         }
 
         function draw(e) {
             if (!isDrawing) return;
             
-            const rect = canvas.getBoundingClientRect();
-            const scaleX = canvas.width / rect.width;
-            const scaleY = canvas.height / rect.height;
-            const currentX = (e.clientX - rect.left) * scaleX;
-            const currentY = (e.clientY - rect.top) * scaleY;
+            const coords = getEventCoords(e);
+            const currentX = coords.x;
+            const currentY = coords.y;
             
             drawImage();
             
@@ -413,11 +463,9 @@ HTML_TEMPLATE = """
             if (!isDrawing) return;
             isDrawing = false;
             
-            const rect = canvas.getBoundingClientRect();
-            const scaleX = canvas.width / rect.width;
-            const scaleY = canvas.height / rect.height;
-            const endX = (e.clientX - rect.left) * scaleX;
-            const endY = (e.clientY - rect.top) * scaleY;
+            const coords = getEventCoords(e);
+            const endX = coords.x;
+            const endY = coords.y;
             
             const width = endX - startX;
             const height = endY - startY;
@@ -616,4 +664,4 @@ def predict():
 if __name__ == '__main__':
     print("=准备启动推理服务器=")
     load_model()
-    app.run(host='0.0.0.0', port=5000, debug=False)
+    app.run(host='0.0.0.0', port=8124, debug=False)
